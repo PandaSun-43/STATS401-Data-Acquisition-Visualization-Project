@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>CO₂ Emissions Treemap </title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 20px;
+    }
+    .slider-container {
+      margin-bottom: 10px;
+      text-align: center;
+    }
+    #current-year {
+      font-size: 20px;
+      margin-right: 20px;
+    }
+    svg {
+      border: 1px solid #ccc;
+    }
+    .country-rect {
+      stroke: #fff;
+      stroke-width: 1px;
+    }
+    /* By default, text is black for good contrast on all blues.
+       If you prefer white text for dark cells, remove or adapt. */
+    text {
+      fill: black;
+      pointer-events: none; /* allow clicks to pass through text to the rect */
+    }
+  </style>
+</head>
+<body>
+
+<div class="slider-container">
+  <span id="current-year">1949</span>
+  <input type="range" id="yearSlider" min="1949" max="2023" value="1949">
+</div>
+
+<svg id="treemap" width="1400" height="800"></svg>
+
+<script>
+const width = 1400,
+      height = 800;
+
+// 1) Load CSV
+d3.csv("cleaned_annual-co-emissions-country.csv").then(data => {
+  // Convert numeric fields
+  data.forEach(d => {
+    d.Year = +d.Year;
+    d["Annual CO2 emissions"] = +d["Annual CO2 emissions"];
+  });
+
+  // 2) Prepare color scale
+  const maxEmission = d3.max(data, d => d["Annual CO2 emissions"]);
+  const colorScale = d3.scaleSequential(d3.interpolateBlues)
+                       .domain([0, maxEmission]);
+
+  // 3) Select the SVG
+  const svg = d3.select("#treemap");
+
+  // 4) Function to render the treemap for a given year
+  function renderTreemap(year) {
+    // Filter data for that year
+    const yearData = data.filter(d => d.Year === year);
+
+    // Build hierarchy
+    const root = d3.hierarchy({children: yearData})
+      .sum(d => d["Annual CO2 emissions"])
+      .sort((a, b) => b.value - a.value);
+
+    // Layout
+    d3.treemap()
+      .size([width, height])
+      .padding(1)(root);
+
+    // Data join
+    const groups = svg.selectAll("g")
+      .data(root.leaves(), d => d.data.Entity);
+
+    // EXIT
+    groups.exit().remove();
+
+    // ENTER
+    const enterGroups = groups.enter().append("g")
+      .attr("transform", d => `translate(${d.x0},${d.y0})`);
+
+    enterGroups.append("rect")
+      .attr("class", "country-rect")
+      .attr("width", d => d.x1 - d.x0)
+      .attr("height", d => d.y1 - d.y0)
+      .attr("fill", d => colorScale(d.value));
+
+    // One <text> per group
+    enterGroups.append("text")
+      .attr("text-anchor", "middle")
+      .attr("dominant-baseline", "central");
+
+    // MERGE (enter + update)
+    const mergedGroups = enterGroups.merge(groups);
+
+    // Update positions/sizes
+    mergedGroups
+      .attr("transform", d => `translate(${d.x0},${d.y0})`);
+
+    mergedGroups.select("rect")
+      .attr("width", d => d.x1 - d.x0)
+      .attr("height", d => d.y1 - d.y0)
+      .attr("fill", d => colorScale(d.value));
+
+    // Update text
+    mergedGroups.each(function(d) {
+      // 'this' is the <g>
+      const g = d3.select(this);
+      const textEl = g.select("text");
+
+      // Calculate final width/height
+      const w = d.x1 - d.x0;
+      const h = d.y1 - d.y0;
+      const minDim = Math.min(w, h);
+
+      // Determine font size from rectangle size
+      const fontSize = minDim / 10;
+
+      // Clear old tspans
+      textEl.selectAll("*").remove();
+
+      // If the rectangle is too small, skip text entirely
+      if (fontSize < 6) return;
+
+      // Center text
+      // Show entity name and emissions
+      textEl.append("tspan")
+        .attr("x", w / 2)
+        .attr("y", h / 2 - fontSize * 0.6)
+        .style("font-size", fontSize + "px")
+        .text(d.data.Entity);
+
+      textEl.append("tspan")
+        .attr("x", w / 2)
+        .attr("y", h / 2 + fontSize * 0.6)
+        .style("font-size", fontSize + "px")
+        .text(d3.format(",")(Math.round(d.value)));
+    });
+  }
+
+  // 5) Initial render
+  renderTreemap(1949);
+
+  // 6) Slider event
+  d3.select("#yearSlider").on("input", function() {
+    const year = +this.value;
+    d3.select("#current-year").text(year);
+    renderTreemap(year);
+  });
+});
+</script>
+
+</body>
+</html>

@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Correlation Matrix (Population, CO₂, Temperature)</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    /* Center the SVG on the page */
+    html, body {
+      margin: 0; 
+      padding: 0; 
+      width: 100%; 
+      height: 100%;
+      display: flex; 
+      justify-content: center; 
+      align-items: center;
+      background-color: #fff;
+      font-family: sans-serif;
+    }
+
+    /* Tooltip styling */
+    .tooltip {
+      position: absolute;
+      background: rgba(0,0,0,0.7);
+      color: #fff;
+      padding: 4px 8px;
+      border-radius: 4px;
+      pointer-events: none;
+      font-size: 14px;
+      display: none; /* hidden by default */
+    }
+
+    /* Correlation matrix cells */
+    .cell {
+      stroke: #000;      /* dark boundary */
+      stroke-width: 1px; /* boundary thickness */
+    }
+
+    /* Diagonal cells (with slash pattern) */
+    .diagonal-cell {
+      stroke: #000;
+      stroke-width: 1px;
+    }
+
+    /* Row and column labels */
+    .row-label, .col-label {
+      fill: #000;
+      font-size: 14px;
+      font-weight: bold;
+    }
+
+    /* Legend axis text */
+    .legend-axis text, .legend-axis line {
+      fill: #000;
+      stroke: none;
+      font-size: 12px;
+    }
+
+    /* Matrix title */
+    .matrix-title {
+      font-size: 20px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+    
+  <!-- Tooltip container -->
+  <div class="tooltip" id="tooltip"></div>
+
+  <script>
+    // ------------------------------------------------------
+    // 1) Pearson Correlation helper
+    // ------------------------------------------------------
+    function pearsonCorrelation(x, y) {
+      if (x.length !== y.length) {
+        throw new Error("Arrays must have the same length");
+      }
+      const n = x.length;
+      const meanX = d3.mean(x);
+      const meanY = d3.mean(y);
+      let num = 0, denX = 0, denY = 0;
+      for (let i = 0; i < n; i++) {
+        const dx = x[i] - meanX;
+        const dy = y[i] - meanY;
+        num += dx * dy;
+        denX += dx * dx;
+        denY += dy * dy;
+      }
+      return num / Math.sqrt(denX * denY);
+    }
+
+    // ------------------------------------------------------
+    // 2) Load Data (Population, CO₂, Temperature)
+    // ------------------------------------------------------
+    Promise.all([
+      d3.csv("cleaned_global_annual_population.csv", d => ({
+        year: +d.Year,
+        population: +d["Global Annual Population (billions)"]
+      })),
+      d3.csv("cleaned_global_annual_co2_emission.csv", d => ({
+        year: +d.Year,
+        co2: +d["Global Annual CO2 Emissions (billion t)"]
+      })),
+      d3.csv("cleaned_temperature_anomaly.csv", d => ({
+        year: +d.Year,
+        anomaly: +d["Global average temperature anomaly relative to 1961-1990"]
+      }))
+    ]).then(([popData, co2Data, tempData]) => {
+
+      // ------------------------------------------------------
+      // 3) Merge the data by year
+      // ------------------------------------------------------
+      const popMap  = new Map(popData.map(d => [d.year, d.population]));
+      const co2Map  = new Map(co2Data.map(d => [d.year, d.co2]));
+      const tempMap = new Map(tempData.map(d => [d.year, d.anomaly]));
+
+      // Collect all possible years
+      const allYears = Array.from(new Set([
+        ...popMap.keys(),
+        ...co2Map.keys(),
+        ...tempMap.keys()
+      ])).sort((a, b) => a - b);
+
+      // Build merged data array
+      const mergedData = [];
+      for (const year of allYears) {
+        if (popMap.has(year) && co2Map.has(year) && tempMap.has(year)) {
+          mergedData.push({
+            year,
+            population: popMap.get(year),
+            co2: co2Map.get(year),
+            anomaly: tempMap.get(year)
+          });
+        }
+      }
+
+      // ------------------------------------------------------
+      // 4) Compute correlation matrix for these 3 variables
+      // ------------------------------------------------------
+      const variables = [
+        { key: "population", label: "Population" },
+        { key: "co2",        label: "CO₂ Emission" },
+        { key: "anomaly",    label: "Temp Anomaly" }
+      ];
+
+      const n = variables.length;
+      const corrMatrix = [];
+      for (let i = 0; i < n; i++) {
+        corrMatrix[i] = [];
+        for (let j = 0; j < n; j++) {
+          if (i === j) {
+            corrMatrix[i][j] = 1; // diagonal
+          } else {
+            const x = mergedData.map(d => d[variables[i].key]);
+            const y = mergedData.map(d => d[variables[j].key]);
+            corrMatrix[i][j] = pearsonCorrelation(x, y);
+          }
+        }
+      }
+
+      // ------------------------------------------------------
+      // 5) Separate off-diagonal vs. diagonal
+      // ------------------------------------------------------
+      const offDiagonalData = []; // i != j
+      const diagonalData    = []; // i == j
+
+      for (let i = 0; i < n; i++) {
+        for (let j = 0; j < n; j++) {
+          if (i === j) {
+            diagonalData.push({ row: i, col: j, value: corrMatrix[i][j] });
+          } else {
+            offDiagonalData.push({ row: i, col: j, value: corrMatrix[i][j] });
+          }
+        }
+      }
+
+      // ------------------------------------------------------
+      // 6) Draw the correlation matrix as a heatmap
+      // ------------------------------------------------------
+      const cellSize = 120;   // each cell dimension
+      const labelSize = 140;  // space for row/col labels
+      const margin = 60;      // extra margin around
+      const svgSize = labelSize + n * cellSize + margin;
+
+      // Create an SVG
+      const svg = d3.select("body")
+        .append("svg")
+        .attr("width", svgSize)
+        .attr("height", svgSize);
+
+      // Title
+      svg.append("text")
+        .attr("class", "matrix-title")
+        .attr("x", svgSize / 2)
+        .attr("y", 15)  // move up
+        .attr("text-anchor", "middle")
+        .text("Correlation Matrix (Population, CO₂, Temperature)");
+
+      // Color scale from 0.9 to 1.0
+      const colorScale = d3.scaleSequential(d3.interpolateReds)
+        .domain([0.9, 1])
+        .clamp(true);
+
+      // Create a tooltip reference
+      const tooltip = d3.select("#tooltip");
+
+      // --- Off-diagonal cells (i !== j) ---
+      svg.selectAll("rect.cell")
+        .data(offDiagonalData)
+        .enter()
+        .append("rect")
+          .attr("class", "cell")
+          .attr("x", d => labelSize + d.col * cellSize)
+          .attr("y", d => labelSize + d.row * cellSize)
+          .attr("width", cellSize)
+          .attr("height", cellSize)
+          .attr("fill", d => colorScale(d.value))
+          .on("mouseover", (event, d) => {
+            tooltip
+              .style("display", "block")
+              .html(`Correlation: ${d.value.toFixed(2)}`);
+          })
+          .on("mousemove", (event) => {
+            tooltip
+              .style("left", event.pageX + 10 + "px")
+              .style("top", event.pageY + 10 + "px");
+          })
+          .on("mouseout", () => {
+            tooltip.style("display", "none");
+          });
+
+      // --- Diagonal cells (i === j) with slash pattern ---
+      const defs = svg.append("defs");
+      const slashPattern = defs.append("pattern")
+        .attr("id", "slashPattern")
+        .attr("width", 10)
+        .attr("height", 10)
+        .attr("patternUnits", "userSpaceOnUse");
+
+      // White background
+      slashPattern.append("rect")
+        .attr("width", 10)
+        .attr("height", 10)
+        .attr("fill", "#fff");
+
+      // "\" slash
+      slashPattern.append("path")
+        .attr("d", "M0,0 L10,10")
+        .attr("stroke", "#999")
+        .attr("stroke-width", 2);
+
+      svg.selectAll("rect.diagonal-cell")
+        .data(diagonalData)
+        .enter()
+        .append("rect")
+          .attr("class", "diagonal-cell")
+          .attr("x", d => labelSize + d.col * cellSize)
+          .attr("y", d => labelSize + d.row * cellSize)
+          .attr("width", cellSize)
+          .attr("height", cellSize)
+          .attr("fill", "url(#slashPattern)")
+          .on("mouseover", (event, d) => {
+            tooltip
+              .style("display", "block")
+              .html("Correlation: 1.00 (self)");
+          })
+          .on("mousemove", (event) => {
+            tooltip
+              .style("left", event.pageX + 10 + "px")
+              .style("top", event.pageY + 10 + "px");
+          })
+          .on("mouseout", () => {
+            tooltip.style("display", "none");
+          });
+
+      // Row labels (vertical axis)
+      svg.selectAll(".row-label")
+        .data(variables)
+        .enter()
+        .append("text")
+          .attr("class", "row-label")
+          .attr("x", labelSize - 10)
+          .attr("y", (d, i) => labelSize + i * cellSize + cellSize / 2)
+          .attr("text-anchor", "end")
+          .attr("dominant-baseline", "middle")
+          .text(d => d.label);
+
+      // Column labels (rotate, move them up more)
+      svg.selectAll(".col-label")
+        .data(variables)
+        .enter()
+        .append("text")
+          .attr("class", "col-label")
+          .attr("transform", (d, i) => {
+            const x = labelSize + i * cellSize + cellSize / 1.2;
+            const y = labelSize - 40; 
+            return `translate(${x}, ${y}) rotate(-20)`;
+          })
+          .attr("text-anchor", "end")
+          .attr("dominant-baseline", "middle")
+          .text(d => d.label);
+
+      // ------------------------------------------------------
+      // 7) Add a color legend bar for correlation
+      // ------------------------------------------------------
+      const legendWidth  = 200,
+            legendHeight = 10;
+
+      // Position the legend below the matrix
+      const legendX = (svgSize - legendWidth) / 2;
+      const legendY = labelSize + n * cellSize + 30;
+
+      // Scale for the legend axis (0.9 to 1.0)
+      const legendScale = d3.scaleLinear()
+        .domain([0.9, 1.0])
+        .range([0, legendWidth]);
+
+      // Use the same colorScale to ensure a match:
+      const legendGradient = defs.append("linearGradient")
+        .attr("id", "legendGradient")
+        .attr("x1", "0%").attr("y1", "0%")
+        .attr("x2", "100%").attr("y2", "0%");
+
+      legendGradient.append("stop")
+        .attr("offset", "0%")
+        .attr("stop-color", colorScale(0.9)); // left side
+      legendGradient.append("stop")
+        .attr("offset", "100%")
+        .attr("stop-color", colorScale(1.0)); // right side
+
+      // Draw legend rect
+      svg.append("rect")
+        .attr("x", legendX)
+        .attr("y", legendY)
+        .attr("width", legendWidth)
+        .attr("height", legendHeight)
+        .style("fill", "url(#legendGradient)");
+
+      // Legend label above the bar
+      svg.append("text")
+        .attr("x", legendX + legendWidth / 2)
+        .attr("y", legendY - 8)
+        .attr("text-anchor", "middle")
+        .style("font-size", "14px")
+        .text("Correlation");
+
+      // Legend axis (remove the domain line so no black bar appears)
+      const legendAxis = d3.axisBottom(legendScale)
+        .tickValues([0.9, 0.95, 1.0])
+        .tickFormat(d3.format(".2f"))
+        .tickSize(0); // no tick lines
+
+      const legendAxisG = svg.append("g")
+        .attr("class", "legend-axis")
+        .attr("transform", `translate(${legendX}, ${legendY + legendHeight})`)
+        .call(legendAxis);
+
+      // Remove the black domain line
+      legendAxisG.select(".domain").remove();
+    });
+  </script>
+</body>
+</html>

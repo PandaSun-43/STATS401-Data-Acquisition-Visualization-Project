@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>CO₂ Emissions and Temperature Anomalies</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            }
+            .line {
+            fill: none;
+            stroke-width: 2px;
+            }
+            .axis-label {
+            font-size: 14px;
+            font-weight: bold;
+            }
+            .legend rect {
+            width: 15px;
+            height: 15px;
+        }
+    /* Tooltip styling */
+        .tooltip {
+            position: absolute;
+            background-color: #f9f9f9;
+            border: 1px solid #ccc;
+            padding: 5px;
+            pointer-events: none;
+            display: none; /* hidden by default */
+    }
+    </style>
+</head>
+<body>
+    <h2>CO₂ Emissions and Temperature Anomalies Over Time</h2>
+    <svg width="1250" height="550"></svg>
+
+    <script>
+    // Set dimensions and margins (extra padding at top for legend)
+    const width = 950,
+          height = 500,
+          margin = { top: 70, right: 100, bottom: 50, left: 90 };
+
+    // Append SVG canvas
+    const svg = d3.select("svg")
+      .attr("width", width)
+      .attr("height", height + 50); // Extra height for shifting the plot down
+
+    // Append a group to shift the entire chart downward
+    const chartGroup = svg.append("g")
+      .attr("transform", `translate(0,50)`); // Moves everything down
+
+    // Parse year format
+    const parseYear = d3.timeParse("%Y");
+
+    // Create a tooltip div (hidden by default)
+    const tooltip = d3.select("body")
+        .append("div")
+        .attr("class", "tooltip");
+
+    // Load datasets with correct column names
+    Promise.all([
+        d3.csv("cleaned_global_annual_co2_emission.csv", d => ({
+        year: parseYear(d.Year),
+        co2: d["Global Annual CO2 Emissions (billion t)"]
+                ? +d["Global Annual CO2 Emissions (billion t)"]
+              : null // Handle missing values
+        })),
+        d3.csv("cleaned_temperature_anomaly.csv", d => ({
+        year: parseYear(d.Year),
+        anomaly: d["Global average temperature anomaly relative to 1961-1990"]
+                ? +d["Global average temperature anomaly relative to 1961-1990"]
+                : null
+        }))
+    ]).then(([co2Data, tempData]) => {
+
+      // Merge datasets by year
+        let dataMap = new Map();
+        co2Data.forEach(d => dataMap.set(d.year.getFullYear(), { 
+        year: d.year, 
+        co2: d.co2 
+        }));
+        tempData.forEach(d => {
+        if (dataMap.has(d.year.getFullYear())) {
+            dataMap.get(d.year.getFullYear()).anomaly = d.anomaly;
+        }
+        });
+
+      // Convert map to array and remove rows with missing values
+        let data = Array.from(dataMap.values())
+                        .filter(d => d.co2 !== null && d.anomaly !== null);
+
+      // Debugging: Check if data loaded correctly
+        console.log("Processed Data:", data);
+
+      // Set scales (Separate y-axis for better visibility)
+        const xScale = d3.scaleTime()
+        .domain(d3.extent(data, d => d.year))
+        .range([margin.left, width - margin.right]);
+
+      const yScaleLeft = d3.scaleLinear() // For CO2
+        .domain([0, d3.max(data, d => d.co2)])
+        .range([height - margin.bottom, margin.top]);
+
+      const yScaleRight = d3.scaleLinear() // For Temperature Anomalies
+        .domain(d3.extent(data, d => d.anomaly))
+        .range([height - margin.bottom, margin.top]);
+
+      // Line generator function
+        const createLine = (key, yScale) => d3.line()
+        .x(d => xScale(d.year))
+        .y(d => yScale(d[key]));
+
+      // Draw the CO₂ Emissions line (Blue)
+        const co2Line = chartGroup.append("path")
+        .datum(data)
+        .attr("class", "line")
+        .attr("stroke", "blue")
+        .attr("d", createLine("co2", yScaleLeft));
+
+      // Draw the Temperature Anomalies line (Red)
+        const anomalyLine = chartGroup.append("path")
+        .datum(data)
+        .attr("class", "line")
+        .attr("stroke", "red")
+        .attr("d", createLine("anomaly", yScaleRight));
+
+      // Add X-Axis
+        chartGroup.append("g")
+        .attr("transform", `translate(0,${height - margin.bottom})`)
+        .call(d3.axisBottom(xScale).ticks(10));
+
+      // Add Left Y-Axis (CO₂) with extra padding
+        chartGroup.append("g")
+        .attr("transform", `translate(${margin.left},0)`)
+        .call(d3.axisLeft(yScaleLeft))
+        .selectAll("text")
+        .style("font-size", "12px") // Adjust font size for better readability
+        .attr("dx", "-5px"); // Shift left for visibility
+
+      // Add Right Y-Axis (Temperature Anomalies)
+      // --> Removed the "+ 10" to align properly with the x-axis
+        chartGroup.append("g")
+        .attr("transform", `translate(${width - margin.right},0)`)
+        .call(d3.axisRight(yScaleRight));
+
+      // Add Axis Labels
+        chartGroup.append("text")
+        .attr("class", "axis-label")
+        .attr("x", width / 2)
+        .attr("y", height - 10)
+        .style("text-anchor", "middle")
+        .style("font-size", "14px")
+        .text("Year");
+
+        chartGroup.append("text")
+        .attr("class", "axis-label")
+        .attr("transform", "rotate(-90)")
+        .attr("x", -height / 2)
+        .attr("y", 40) // Shift further left
+        .style("text-anchor", "middle")
+        .style("font-size", "14px")
+        .text("CO₂ Emissions (Gigatonnes)");
+
+        chartGroup.append("text")
+        .attr("class", "axis-label")
+        .attr("transform", `rotate(-90)`)
+        .attr("x", -height / 2)
+        .attr("y", width - margin.right + 50) // Adjust for better placement
+        .style("text-anchor", "middle")
+        .style("font-size", "14px")
+        .text("Temperature Anomalies (°C)");
+
+      // Keep legend at the top
+        const legend = svg.append("g")
+        .attr("transform", `translate(${width - 200},${margin.top - 30})`);
+
+        const legendItems = [
+        { color: "blue", text: "CO₂ Emissions" },
+        { color: "red", text: "Temperature Anomalies" }
+    ];
+
+    legend.selectAll("rect")
+        .data(legendItems)
+        .enter().append("rect")
+            .attr("x", 0)
+            .attr("y", (d, i) => i * 25) // More space between legend items
+            .attr("width", 15)
+            .attr("height", 15)
+            .attr("fill", d => d.color);
+
+        legend.selectAll("text")
+        .data(legendItems)
+        .enter().append("text")
+        .attr("x", 25) // Move text away from box
+        .attr("y", (d, i) => i * 25 + 12)
+        .style("font-size", "13px")
+        .text(d => d.text);
+
+      // -----------------------------------------
+      // ADD INTERACTIVE POINTS & TOOLTIP
+      // -----------------------------------------
+
+      // Draw circles for CO2 line
+    chartGroup.selectAll(".circle-co2")
+        .data(data)
+        .enter()
+        .append("circle")
+        .attr("class", "circle-co2")
+        .attr("cx", d => xScale(d.year))
+        .attr("cy", d => yScaleLeft(d.co2))
+        .attr("r", 3)
+        .attr("fill", "blue")
+        .on("mouseover", (event, d) => {
+          // Enlarge the circle
+        d3.select(event.currentTarget)
+            .transition()
+            .duration(100)
+            .attr("r", 6);
+
+          // Show the tooltip
+        tooltip
+            .style("display", "inline")
+            .html(`
+            <strong>Year:</strong> ${d.year.getFullYear()}<br/>
+            <strong>CO₂:</strong> ${d.co2.toFixed(2)}
+            `);
+        })
+        .on("mousemove", (event) => {
+          // Move the tooltip with the mouse
+        tooltip
+            .style("left", event.pageX + 10 + "px")
+            .style("top", event.pageY + 10 + "px");
+        })
+        .on("mouseout", (event) => {
+          // Reset circle size
+        d3.select(event.currentTarget)
+            .transition()
+            .duration(100)
+            .attr("r", 3);
+
+          // Hide the tooltip
+        tooltip.style("display", "none");
+        });
+
+      // Draw circles for Temperature Anomalies line
+    chartGroup.selectAll(".circle-anomaly")
+        .data(data)
+        .enter()
+        .append("circle")
+        .attr("class", "circle-anomaly")
+        .attr("cx", d => xScale(d.year))
+        .attr("cy", d => yScaleRight(d.anomaly))
+        .attr("r", 3)
+        .attr("fill", "red")
+        .on("mouseover", (event, d) => {
+        d3.select(event.currentTarget)
+            .transition()
+            .duration(100)
+            .attr("r", 6);
+
+        tooltip
+            .style("display", "inline")
+            .html(`
+            <strong>Year:</strong> ${d.year.getFullYear()}<br/>
+            <strong>Temp Anomaly:</strong> ${d.anomaly.toFixed(2)}°C
+            `);
+        })
+        .on("mousemove", (event) => {
+        tooltip
+            .style("left", event.pageX + 10 + "px")
+            .style("top", event.pageY + 10 + "px");
+        })
+        .on("mouseout", (event) => {
+        d3.select(event.currentTarget)
+            .transition()
+            .duration(100)
+            .attr("r", 3);
+
+        tooltip.style("display", "none");
+        });
+
+      // -----------------------------------------
+      // HIGHLIGHT LINE ON HOVER
+      // -----------------------------------------
+    co2Line
+        .on("mouseover", function() {
+          // Thicken this line
+        d3.select(this).style("stroke-width", 4);
+          // Turn the other line gray
+        anomalyLine.style("stroke", "gray");
+        })
+        .on("mouseout", function() {
+          // Revert to original
+        d3.select(this).style("stroke-width", 2);
+        anomalyLine.style("stroke", "red");
+        });
+
+    anomalyLine
+        .on("mouseover", function() {
+        d3.select(this).style("stroke-width", 4);
+        co2Line.style("stroke", "gray");
+        })
+        .on("mouseout", function() {
+        d3.select(this).style("stroke-width", 2);
+        co2Line.style("stroke", "blue");
+        });
+
+    });
+    </script>
+</body>
+</html>

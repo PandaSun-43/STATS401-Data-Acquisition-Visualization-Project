@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Visual Analytics for Climate Change Data</title>
+  <!-- Load D3 -->
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    /* Basic page and navigation styling */
+    body {
+      margin: 0;
+      font-family: sans-serif;
+      background: #fff;
+    }
+    header {
+      background: #333;
+      color: #fff;
+      padding: 10px 20px;
+      text-align: center;
+    }
+    nav {
+      background: #444;
+      padding: 10px;
+      text-align: center;
+    }
+    nav a {
+      color: #fff;
+      margin: 0 15px;
+      text-decoration: none;
+      font-weight: bold;
+    }
+    .section {
+      padding: 20px;
+      border-bottom: 1px solid #ddd;
+    }
+    .section h2 {
+      margin-top: 0;
+    }
+    /* Shared tooltip styling */
+    .tooltip {
+      position: absolute;
+      background: rgba(0,0,0,0.7);
+      color: #fff;
+      padding: 5px 10px;
+      border-radius: 4px;
+      pointer-events: none;
+      font-size: 14px;
+      display: none; /* hidden by default */
+    }
+    /* For the line chart's paths */
+    .line {
+      fill: none;          /* Ensure no fill under the line */
+      stroke-width: 2px;
+    }
+    /* Bubbles (bubble chart) */
+    .bubble {
+      stroke: #fff;
+      stroke-width: 1px;
+    }
+    /* Treemap rectangles */
+    .country-rect {
+      stroke: #fff;
+      stroke-width: 1px;
+      pointer-events: all;
+    }
+    /* Correlation matrix cells */
+    .cell {
+      stroke: #000;
+      stroke-width: 1px;
+    }
+    .diagonal-cell {
+      stroke: #000;
+      stroke-width: 1px;
+    }
+    /* Containers for each chart's SVG */
+    #line-chart svg,
+    #heatmap svg,
+    #treemap svg,
+    #correlation-matrix svg,
+    #bubble-chart svg {
+      border: 1px solid #ccc;
+    }
+    /* --- Styles for the bubble chart filter --- */
+    /* Flex container for bubble chart & filter */
+    #bubble-chart-container {
+      display: flex;
+      align-items: flex-start;
+    }
+    /* The chart area (left side) */
+    #bubble-chart-chart {
+      /* width is defined by SVG */
+    }
+    /* Scrollable container for checkboxes (right side) */
+    #bubble-chart-filter {
+      width: 200px;
+      height: 300px;
+      overflow-y: auto;
+      border: 1px solid #ccc;
+      padding: 5px;
+      margin-left: 20px;
+    }
+    #bubble-chart-filter label {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Visual Analytics for Climate Change Data</h1>
+  </header>
+  <nav>
+    <a href="#line-chart">Line Chart</a>
+    <a href="#heatmap">Heatmap</a>
+    <a href="#treemap">Treemap</a>
+    <a href="#correlation-matrix">Correlation Matrix</a>
+    <a href="#bubble-chart">Bubble Chart</a>
+  </nav>
+
+  <!-- 1) Line Chart Section -->
+  <div class="section" id="line-chart">
+    <h2>CO₂ Emissions and Temperature Anomalies (Line Chart)</h2>
+    <!-- SVG appended via script -->
+  </div>
+
+  <!-- 2) Heatmap Section -->
+  <div class="section" id="heatmap">
+    <h2>CO₂ Emissions Per Capita Heatmap</h2>
+    <!-- SVG appended via script (with legend bar at the right side) -->
+  </div>
+
+  <!-- 3) Treemap Section -->
+  <div class="section" id="treemap">
+    <h2>CO₂ Emissions Treemap</h2>
+    <div style="text-align:center; margin-bottom:10px;">
+      <span id="treemap-year" style="font-size:20px; margin-right:20px;">1949</span>
+      <input type="range" id="treemap-slider" min="1949" max="2023" value="1949">
+    </div>
+    <!-- SVG appended via script -->
+  </div>
+
+  <!-- 4) Correlation Matrix Section -->
+  <div class="section" id="correlation-matrix">
+    <h2>Correlation Matrix (Population, CO₂ Emissions, Temperature)</h2>
+    <!-- SVG appended via script -->
+  </div>
+
+  <!-- 5) Bubble Chart Section -->
+  <div class="section" id="bubble-chart">
+    <h2>Bubble Chart: CO₂ Emission vs. Temperature Contribution (Prediction of 2030)</h2>
+    <div id="bubble-chart-container">
+      <!-- Chart area -->
+      <div id="bubble-chart-chart"></div>
+      <!-- Checkbox filter panel -->
+      <div id="bubble-chart-filter"></div>
+    </div>
+  </div>
+
+  <!-- Shared Tooltip -->
+  <div class="tooltip" id="tooltip"></div>
+
+  <!-- LINE CHART SCRIPT -->
+  <script>
+  (function(){
+    const container = d3.select("#line-chart");
+    const svgWidth = 950, svgHeight = 550, margin = { top: 70, right: 100, bottom: 80, left: 90 };
+    
+    const svg = container.append("svg")
+      .attr("width", svgWidth)
+      .attr("height", svgHeight);
+    const chartGroup = svg.append("g")
+      .attr("transform", `translate(0,50)`);
+    const parseYear = d3.timeParse("%Y");
+    const tooltip = d3.select("#tooltip");
+
+    Promise.all([
+      d3.csv("cleaned_global_annual_co2_emission.csv", d => ({
+        year: parseYear(d.Year),
+        co2: d["Global Annual CO2 Emissions (billion t)"] ? +d["Global Annual CO2 Emissions (billion t)"] : null
+      })),
+      d3.csv("cleaned_temperature_anomaly.csv", d => ({
+        year: parseYear(d.Year),
+        anomaly: d["Global average temperature anomaly relative to 1961-1990"] ? +d["Global average temperature anomaly relative to 1961-1990"] : null
+      }))
+    ]).then(([co2Data, tempData])=>{
+      let dataMap = new Map();
+      co2Data.forEach(d => dataMap.set(d.year.getFullYear(), { year: d.year, co2: d.co2 }));
+      tempData.forEach(d => {
+        if(dataMap.has(d.year.getFullYear())){
+          dataMap.get(d.year.getFullYear()).anomaly = d.anomaly;
+        }
+      });
+      let data = Array.from(dataMap.values()).filter(d => d.co2 !== null && d.anomaly !== null);
+
+      const xScale = d3.scaleTime()
+        .domain(d3.extent(data, d => d.year))
+        .range([margin.left, svgWidth - margin.right]);
+      const yScaleLeft = d3.scaleLinear()
+        .domain([0, d3.max(data, d => d.co2)])
+        .range([svgHeight - margin.bottom, margin.top]);
+      const yScaleRight = d3.scaleLinear()
+        .domain(d3.extent(data, d => d.anomaly))
+        .range([svgHeight - margin.bottom, margin.top]);
+
+      const lineCO2 = d3.line()
+        .x(d => xScale(d.year))
+        .y(d => yScaleLeft(d.co2));
+      const lineTemp = d3.line()
+        .x(d => xScale(d.year))
+        .y(d => yScaleRight(d.anomaly));
+
+      const co2Path = chartGroup.append("path")
+        .datum(data)
+        .attr("class", "line")
+        .attr("stroke", "blue")
+        .attr("d", lineCO2);
+      const tempPath = chartGroup.append("path")
+        .datum(data)
+        .attr("class", "line")
+        .attr("stroke", "red")
+        .attr("d", lineTemp);
+
+      chartGroup.append("g")
+        .attr("transform", `translate(0,${svgHeight - margin.bottom})`)
+        .call(d3.axisBottom(xScale).ticks(10));
+      chartGroup.append("g")
+        .attr("transform", `translate(${margin.left},0)`)
+        .call(d3.axisLeft(yScaleLeft));
+      chartGroup.append("g")
+        .attr("transform", `translate(${svgWidth - margin.right},0)`)
+        .call(d3.axisRight(yScaleRight));
+
+      chartGroup.append("text")
+        .attr("x", svgWidth/2)
+        .attr("y", svgHeight - 10)
+        .style("text-anchor", "middle")
+        .style("font-size", "14px")
+        .text("Year");
+      chartGroup.append("text")
+        .attr("transform", "rotate(-90)")
+        .attr("x", - (svgHeight/2))
+        .attr("y", 40)
+        .style("text-anchor", "middle")
+        .style("font-size", "14px")
+        .text("CO₂ Emissions (Gigatonnes)");
+      chartGroup.append("text")
+        .attr("transform", "rotate(-90)")
+        .attr("x", - (svgHeight/2))
+        .attr("y", svgWidth - margin.right + 50)
+        .style("text-anchor", "middle")
+        .style("font-size", "14px")
+        .text("Temperature Anomalies (°C)");
+
+      const legend = svg.append("g")
+        .attr("transform", `translate(${svgWidth - 200},${margin.top - 30})`);
+      const legendItems = [
+        { color: "blue", text: "CO₂ Emissions" },
+        { color: "red", text: "Temperature Anomalies" }
+      ];
+      legend.selectAll("rect")
+        .data(legendItems)
+        .enter().append("rect")
+          .attr("x", 0)
+          .attr("y", (d,i)=> i*25)
+          .attr("width", 15)
+          .attr("height", 15)
+          .attr("fill", d=> d.color);
+      legend.selectAll("text")
+        .data(legendItems)
+        .enter().append("text")
+          .attr("x", 25)
+          .attr("y", (d,i)=> i*25+12)
+          .style("font-size", "13px")
+          .text(d=> d.text);
+
+      chartGroup.selectAll(".circle-co2")
+        .data(data)
+        .enter()
+        .append("circle")
+          .attr("class", "circle-co2")
+          .attr("cx", d => xScale(d.year))
+          .attr("cy", d => yScaleLeft(d.co2))
+          .attr("r", 3)
+          .attr("fill", "blue")
+          .on("mouseover", (event, d) => {
+            d3.select(event.currentTarget)
+              .transition().duration(100).attr("r", 6);
+            tooltip.style("display", "block")
+              .html(`<strong>Year:</strong> ${d.year.getFullYear()}<br/><strong>CO₂:</strong> ${d.co2.toFixed(2)}`);
+          })
+          .on("mousemove", (event) => {
+            tooltip.style("left", event.pageX + 10 + "px")
+              .style("top", event.pageY + 10 + "px");
+          })
+          .on("mouseout", (event) => {
+            d3.select(event.currentTarget)
+              .transition().duration(100).attr("r", 3);
+            tooltip.style("display", "none");
+          });
+      chartGroup.selectAll(".circle-temp")
+        .data(data)
+        .enter()
+        .append("circle")
+          .attr("class", "circle-temp")
+          .attr("cx", d => xScale(d.year))
+          .attr("cy", d => yScaleRight(d.anomaly))
+          .attr("r", 3)
+          .attr("fill", "red")
+          .on("mouseover", (event, d) => {
+            d3.select(event.currentTarget)
+              .transition().duration(100).attr("r", 6);
+            tooltip.style("display", "block")
+              .html(`<strong>Year:</strong> ${d.year.getFullYear()}<br/><strong>Temp Anomaly:</strong> ${d.anomaly.toFixed(2)} °C`);
+          })
+          .on("mousemove", (event) => {
+            tooltip.style("left", event.pageX + 10 + "px")
+              .style("top", event.pageY + 10 + "px");
+          })
+          .on("mouseout", (event) => {
+            d3.select(event.currentTarget)
+              .transition().duration(100).attr("r", 3);
+            tooltip.style("display", "none");
+          });
+      co2Path
+        .on("mouseover", function() {
+          d3.select(this).style("stroke-width",4);
+          tempPath.style("stroke","gray");
+        })
+        .on("mouseout", function() {
+          d3.select(this).style("stroke-width",2);
+          tempPath.style("stroke","red");
+        });
+      tempPath
+        .on("mouseover", function() {
+          d3.select(this).style("stroke-width",4);
+          co2Path.style("stroke","gray");
+        })
+        .on("mouseout", function() {
+          d3.select(this).style("stroke-width",2);
+          co2Path.style("stroke","blue");
+        });
+    });
+  })();
+  </script>
+
+  <!-- HEATMAP SCRIPT WITH RIGHT-SIDE LEGEND -->
+  <script>
+  (function(){
+    const container = d3.select("#heatmap");
+    const svgWidth = 1100, svgHeight = 600;
+    const svg = container.append("svg")
+      .attr("width", svgWidth)
+      .attr("height", svgHeight);
+    
+    const projection = d3.geoMercator().scale(150).translate([svgWidth/2, svgHeight/1.5]);
+    const path = d3.geoPath().projection(projection);
+    const colorScale = d3.scaleSequential(d3.interpolateYlOrRd).domain([0,25]);
+    const tooltip = d3.select("#tooltip");
+    
+    // Add legend gradient to defs (vertical)
+    const defs = svg.append("defs");
+    const legendGradient = defs.append("linearGradient")
+      .attr("id", "heatmapLegendGradient")
+      .attr("x1", "0%")
+      .attr("y1", "0%")
+      .attr("x2", "0%")
+      .attr("y2", "100%");
+    legendGradient.append("stop")
+      .attr("offset", "0%")
+      .attr("stop-color", colorScale(25)); // highest value at top
+    legendGradient.append("stop")
+      .attr("offset", "100%")
+      .attr("stop-color", colorScale(0));  // lowest value at bottom
+
+    d3.json("https://raw.githubusercontent.com/holtzy/D3-graph-gallery/master/DATA/world.geojson").then(geoData=>{
+      d3.csv("Per capita CO2 emissions 2023.csv", d=>{
+        return {
+          country: d.Entity,
+          emissions: +d["Per capita CO2 emissions"]
+        };
+      }).then(data=>{
+        let emissions = {};
+        data.forEach(d=> { emissions[d.country] = d.emissions; });
+        svg.selectAll("path")
+          .data(geoData.features)
+          .enter().append("path")
+            .attr("class", "country")
+            .attr("d", path)
+            .attr("fill", d=>{
+              const countryName = d.properties.name.trim();
+              const emissionValue = emissions[countryName];
+              return emissionValue ? colorScale(emissionValue) : "#ccc";
+            })
+            .on("mouseover", (event,d)=>{
+              const countryName = d.properties.name.trim();
+              const emissionValue = emissions[countryName];
+              if(emissionValue){
+                d3.select(event.currentTarget).style("opacity",0.7);
+                tooltip.style("display","block")
+                  .html(`${countryName}: ${emissionValue.toFixed(2)} CO₂/capita`);
+              }
+            })
+            .on("mousemove", (event)=>{
+              tooltip.style("left",(event.pageX+5)+"px")
+                .style("top",(event.pageY-28)+"px");
+            })
+            .on("mouseout", (event)=>{
+              d3.select(event.currentTarget).style("opacity",1);
+              tooltip.style("display","none");
+            })
+            .on("click", (event,d)=>{
+              const countryName = d.properties.name.trim();
+              const emissionValue = emissions[countryName];
+              if(emissionValue){
+                alert(`${countryName}: ${emissionValue.toFixed(2)} CO₂/capita`);
+              }
+            });
+        
+        // Add vertical legend bar at the right side of the heatmap
+        const legendWidth = 20, legendHeight = 200;
+        const legendX = svgWidth - legendWidth - 30; // 30px from right edge
+        const legendY = 50; // 50px from top
+        svg.append("rect")
+          .attr("x", legendX)
+          .attr("y", legendY)
+          .attr("width", legendWidth)
+          .attr("height", legendHeight)
+          .style("fill", "url(#heatmapLegendGradient)");
+    
+        // Create a legend scale (maps value to y position)
+        const legendScale = d3.scaleLinear()
+          .domain([25, 0])  // top is 25, bottom is 0
+          .range([legendY, legendY + legendHeight]);
+        const legendAxis = d3.axisRight(legendScale)
+          .ticks(5);
+        svg.append("g")
+          .attr("class", "legend-axis")
+          .attr("transform", `translate(${legendX + legendWidth},0)`)
+          .call(legendAxis);
+    
+      }).catch(err=> console.log("CSV error:", err));
+    }).catch(err=> console.log("GeoJSON error:", err));
+  })();
+  </script>
+
+  <!-- TREEMAP SCRIPT WITH TOOLTIP ON HOVER -->
+  <script>
+  (function(){
+    const container = d3.select("#treemap");
+    const svgWidth = 1400, svgHeight = 800;
+    const svg = container.append("svg")
+      .attr("width", svgWidth)
+      .attr("height", svgHeight);
+
+    d3.csv("cleaned_annual-co-emissions-country.csv").then(data=>{
+      data.forEach(d=>{
+        d.Year = +d.Year;
+        d["Annual CO2 emissions"] = +d["Annual CO2 emissions"];
+      });
+      const maxEmission = d3.max(data, d=> d["Annual CO2 emissions"]);
+      const colorScale = d3.scaleSequential(d3.interpolateBlues)
+                           .domain([0, maxEmission]);
+
+      function renderTreemap(year){
+        const yearData = data.filter(d=> d.Year===year);
+        const root = d3.hierarchy({children: yearData})
+          .sum(d=> d["Annual CO2 emissions"])
+          .sort((a,b)=> b.value - a.value);
+        d3.treemap()
+          .size([svgWidth, svgHeight])
+          .padding(1)(root);
+
+        const groups = svg.selectAll("g.treemap-group")
+          .data(root.leaves(), d=> d.data.Entity);
+        groups.exit().remove();
+
+        const enterGroups = groups.enter().append("g")
+          .attr("class", "treemap-group")
+          .attr("transform", d=> `translate(${d.x0},${d.y0})`);
+    
+        // Append rect with tooltip events (works even if text is not visible)
+        enterGroups.append("rect")
+          .attr("class","country-rect")
+          .attr("width", d=> d.x1-d.x0)
+          .attr("height", d=> d.y1-d.y0)
+          .attr("fill", d=> colorScale(d.value))
+          .on("mouseover", function(event, d) {
+              d3.select("#tooltip")
+                .style("display", "block")
+                .html(`<strong>${d.data.Entity}</strong><br/>CO₂ Emissions: ${d3.format(",")(Math.round(d.value))}`);
+          })
+          .on("mousemove", function(event) {
+              d3.select("#tooltip")
+                .style("left", (event.pageX + 10) + "px")
+                .style("top", (event.pageY + 10) + "px");
+          })
+          .on("mouseout", function() {
+              d3.select("#tooltip").style("display", "none");
+          });
+    
+        // Append text for larger cells (if space permits)
+        enterGroups.append("text")
+          .attr("text-anchor","middle")
+          .attr("dominant-baseline","central");
+    
+        const mergedGroups = enterGroups.merge(groups);
+        mergedGroups.transition()
+          .duration(300)
+          .attr("transform", d=> `translate(${d.x0},${d.y0})`);
+        mergedGroups.select("rect")
+          .transition()
+          .duration(300)
+          .attr("width", d=> d.x1-d.x0)
+          .attr("height", d=> d.y1-d.y0)
+          .attr("fill", d=> colorScale(d.value));
+    
+        mergedGroups.each(function(d){
+          const g = d3.select(this);
+          const textEl = g.select("text");
+          const w = d.x1 - d.x0;
+          const h = d.y1 - d.y0;
+          const minDim = Math.min(w,h);
+          const fontSize = minDim/10;
+          textEl.selectAll("*").remove();
+          if(fontSize < 6) return; // If cell too small, no text
+          textEl.append("tspan")
+            .attr("x", w/2)
+            .attr("y", h/2 - fontSize*0.6)
+            .style("font-size", fontSize+"px")
+            .text(d.data.Entity);
+          textEl.append("tspan")
+            .attr("x", w/2)
+            .attr("y", h/2 + fontSize*0.6)
+            .style("font-size", fontSize+"px")
+            .text(d3.format(",")(Math.round(d.value)));
+        });
+      }
+      renderTreemap(1949);
+      d3.select("#treemap-slider").on("input", function(){
+        const year = +this.value;
+        d3.select("#treemap-year").text(year);
+        renderTreemap(year);
+      });
+    });
+  })();
+  </script>
+
+  <!-- CORRELATION MATRIX SCRIPT -->
+  <script>
+  (function(){
+    const container = d3.select("#correlation-matrix");
+    const svg = container.append("svg");
+    const tooltip = d3.select("#tooltip");
+    Promise.all([
+      d3.csv("cleaned_global_annual_population.csv", d=>({
+        year:+d.Year,
+        population:+d["Global Annual Population (billions)"]
+      })),
+      d3.csv("cleaned_global_annual_co2_emission.csv", d=>({
+        year:+d.Year,
+        co2:+d["Global Annual CO2 Emissions (billion t)"]
+      })),
+      d3.csv("cleaned_temperature_anomaly.csv", d=>({
+        year:+d.Year,
+        anomaly:+d["Global average temperature anomaly relative to 1961-1990"]
+      }))
+    ]).then(([popData,co2Data,tempData])=>{
+      const popMap = new Map(popData.map(d=> [d.year,d.population]));
+      const co2Map = new Map(co2Data.map(d=> [d.year,d.co2]));
+      const tempMap= new Map(tempData.map(d=> [d.year,d.anomaly]));
+      const allYears = Array.from(new Set([...popMap.keys(),...co2Map.keys(),...tempMap.keys()])).sort((a,b)=> a-b);
+      const mergedData = [];
+      for(const yr of allYears){
+        if(popMap.has(yr)&&co2Map.has(yr)&&tempMap.has(yr)){
+          mergedData.push({
+            year:yr,
+            population: popMap.get(yr),
+            co2: co2Map.get(yr),
+            anomaly: tempMap.get(yr)
+          });
+        }
+      }
+      const variables = [
+        {key:"population",label:"Population"},
+        {key:"co2",label:"Global CO₂"},
+        {key:"anomaly",label:"Temp Anomaly"}
+      ];
+      const n=variables.length;
+      const corrMatrix=[];
+      for(let i=0;i<n;i++){
+        corrMatrix[i]=[];
+        for(let j=0;j<n;j++){
+          if(i===j){corrMatrix[i][j]=1;} else {
+            const arrX=mergedData.map(d=> d[variables[i].key]);
+            const arrY=mergedData.map(d=> d[variables[j].key]);
+            const meanX=d3.mean(arrX), meanY=d3.mean(arrY);
+            let num=0,denX=0,denY=0;
+            for(let k=0;k<arrX.length;k++){
+              const dx=arrX[k]-meanX, dy=arrY[k]-meanY;
+              num+=dx*dy; denX+=dx*dx; denY+=dy*dy;
+            }
+            corrMatrix[i][j]=num/Math.sqrt(denX*denY);
+          }
+        }
+      }
+      const offDiagonalData=[], diagonalData=[];
+      for(let i=0;i<n;i++){
+        for(let j=0;j<n;j++){
+          if(i===j) diagonalData.push({row:i,col:j,value:corrMatrix[i][j]});
+          else offDiagonalData.push({row:i,col:j,value:corrMatrix[i][j]});
+        }
+      }
+      const cellSize=120, labelSize=140, margin=60;
+      const svgSize=labelSize + n*cellSize + margin;
+      svg.attr("width", svgSize).attr("height", svgSize);
+
+      const colorScale = d3.scaleSequential(d3.interpolateReds)
+        .domain([0.9,1]).clamp(true);
+      svg.selectAll(".cell")
+        .data(offDiagonalData)
+        .enter().append("rect")
+          .attr("class","cell")
+          .attr("x", d=> labelSize + d.col*cellSize)
+          .attr("y", d=> labelSize + d.row*cellSize)
+          .attr("width", cellSize)
+          .attr("height", cellSize)
+          .attr("fill", d=> colorScale(d.value))
+          .on("mouseover",(event,d)=>{
+            tooltip.style("display","block").html(`Correlation: ${d.value.toFixed(2)}`);
+          })
+          .on("mousemove",(event)=>{
+            tooltip.style("left", event.pageX+10+"px").style("top", event.pageY+10+"px");
+          })
+          .on("mouseout",()=>{
+            tooltip.style("display","none");
+          });
+      const defs=svg.append("defs");
+      const slashPattern=defs.append("pattern")
+        .attr("id","slashPattern")
+        .attr("width",10).attr("height",10)
+        .attr("patternUnits","userSpaceOnUse");
+      slashPattern.append("rect")
+        .attr("width",10).attr("height",10)
+        .attr("fill","#fff");
+      slashPattern.append("path")
+        .attr("d","M0,0 L10,10")
+        .attr("stroke","#999").attr("stroke-width",2);
+      svg.selectAll(".diagonal-cell")
+        .data(diagonalData)
+        .enter().append("rect")
+          .attr("class","diagonal-cell")
+          .attr("x", d=> labelSize + d.col*cellSize)
+          .attr("y", d=> labelSize + d.row*cellSize)
+          .attr("width", cellSize)
+          .attr("height", cellSize)
+          .attr("fill","url(#slashPattern)")
+          .on("mouseover",(event,d)=>{
+            tooltip.style("display","block").html("Correlation: 1.00 (self)");
+          })
+          .on("mousemove",(event)=>{
+            tooltip.style("left", event.pageX+10+"px").style("top", event.pageY+10+"px");
+          })
+          .on("mouseout",()=>{
+            tooltip.style("display","none");
+          });
+      svg.selectAll(".row-label")
+        .data(variables)
+        .enter().append("text")
+          .attr("class","row-label")
+          .attr("x", labelSize-10)
+          .attr("y",(d,i)=> labelSize + i*cellSize + cellSize/2)
+          .attr("text-anchor","end")
+          .attr("dominant-baseline","middle")
+          .text(d=> d.label);
+      svg.selectAll(".col-label")
+        .data(variables)
+        .enter().append("text")
+          .attr("class","col-label")
+          .attr("transform",(d,i)=>{
+            const x = labelSize + i*cellSize + cellSize/1.2;
+            const y = labelSize - 40;
+            return `translate(${x},${y}) rotate(-20)`;
+          })
+          .attr("text-anchor","end")
+          .attr("dominant-baseline","middle")
+          .text(d=> d.label);
+      const legendWidth=200, legendHeight=10;
+      const legendX=(svgSize - legendWidth)/2;
+      const legendY=labelSize + n*cellSize + 30;
+      const legendScale=d3.scaleLinear()
+        .domain([0.9,1])
+        .range([0,legendWidth]);
+      const legendGrad=defs.append("linearGradient")
+        .attr("id","legendGradient")
+        .attr("x1","0%").attr("y1","0%")
+        .attr("x2","100%").attr("y2","0%");
+      legendGrad.append("stop")
+        .attr("offset","0%")
+        .attr("stop-color",colorScale(0.9));
+      legendGrad.append("stop")
+        .attr("offset","100%")
+        .attr("stop-color",colorScale(1.0));
+      svg.append("rect")
+        .attr("x",legendX)
+        .attr("y",legendY)
+        .attr("width",legendWidth)
+        .attr("height",legendHeight)
+        .style("fill","url(#legendGradient)");
+      svg.append("text")
+        .attr("x",legendX+legendWidth/2)
+        .attr("y",legendY-8)
+        .attr("text-anchor","middle")
+        .style("font-size","14px")
+        .text("Correlation");
+      const legendAxis=d3.axisBottom(legendScale)
+        .tickValues([0.9,0.95,1.0])
+        .tickFormat(d3.format(".2f"))
+        .tickSize(0);
+      const legendAxisG=svg.append("g")
+        .attr("class","legend-axis")
+        .attr("transform",`translate(${legendX},${legendY+legendHeight})`)
+        .call(legendAxis);
+      legendAxisG.select(".domain").remove();
+    });
+  })();
+  </script>
+
+  <!-- UPDATED BUBBLE CHART SCRIPT WITH RIGHT-SIDE SCROLLABLE CHECKBOX FILTER -->
+  <script>
+  (function(){
+    const chartContainer = d3.select("#bubble-chart-chart");
+    const filterContainer = d3.select("#bubble-chart-filter");
+    
+    const svgWidth = 800, svgHeight = 500;
+    const margin = { top: 50, right: 150, bottom: 50, left: 70 };
+    const innerWidth = svgWidth - margin.left - margin.right;
+    const innerHeight = svgHeight - margin.top - margin.bottom;
+    
+    const svg = chartContainer.append("svg")
+      .attr("width", svgWidth)
+      .attr("height", svgHeight);
+    
+    const chartG = svg.append("g")
+      .attr("transform", `translate(${margin.left},${margin.top})`);
+    
+    const tooltip = d3.select("#tooltip");
+    
+    let fullData = [];
+    
+    d3.csv("updated_forecast.csv").then(data => {
+      data.forEach(d => {
+        d.co2        = +d["CO2 Emission"];
+        d.temp       = +d["Temperature Contribution"];
+        d.population = +d["Population"];
+        d.developed  = d["Country Classification"];
+        d.country    = d["Country"];
+      });
+    
+      fullData = data;
+    
+      createCountryCheckboxes(data);
+    
+      renderBubbleChart(fullData);
+    });
+    
+    function createCountryCheckboxes(data) {
+      filterContainer.html("");
+      
+      // Add "All" checkbox at the top
+      filterContainer.append("label")
+        .html(`<input type="checkbox" id="chkAll" checked> All`);
+      
+      filterContainer.append("br");
+      
+      const uniqueCountries = Array.from(new Set(data.map(d => d.country))).sort();
+    
+      uniqueCountries.forEach(countryName => {
+        filterContainer.append("label")
+          .attr("class", "country-label")
+          .html(`<input type="checkbox" class="country-chk" value="${countryName}"> ${countryName}`);
+      });
+      
+      d3.select("#chkAll").on("change", function() {
+        const checked = d3.select(this).select("input").property("checked");
+        if (checked) {
+          filterContainer.selectAll(".country-chk").property("checked", false);
+          renderBubbleChart(fullData);
+        } else {
+          renderBubbleChart([]);
+        }
+      });
+    
+      filterContainer.selectAll(".country-chk").on("change", function() {
+        d3.select("#chkAll").property("checked", false);
+    
+        const checkedCountries = [];
+        filterContainer.selectAll(".country-chk").each(function() {
+          if (d3.select(this).property("checked")) {
+            checkedCountries.push(d3.select(this).property("value"));
+          }
+        });
+    
+        if (checkedCountries.length === 0) {
+          renderBubbleChart([]);
+        } else {
+          const filtered = fullData.filter(d => checkedCountries.includes(d.country));
+          renderBubbleChart(filtered);
+        }
+      });
+    }
+    
+    function renderBubbleChart(data) {
+      chartG.selectAll(".bubble").remove();
+      chartG.selectAll(".axis").remove();
+    
+      if (!data || data.length === 0) return;
+    
+      const xExtent = d3.extent(data, d => d.co2);
+      const yExtent = d3.extent(data, d => d.temp);
+      const rExtent = d3.extent(data, d => d.population);
+    
+      const minNonZeroX = d3.min(data, d => d.co2 > 0 ? d.co2 : Infinity) || 1;
+      const xScale = d3.scaleLog()
+        .domain([minNonZeroX, xExtent[1] || 1])
+        .range([0, innerWidth])
+        .clamp(true);
+    
+      const minNonZeroY = d3.min(data, d => d.temp > 0 ? d.temp : Infinity) || 1e-5;
+      const yScale = d3.scaleLog()
+        .domain([minNonZeroY, yExtent[1] || 1])
+        .range([innerHeight, 0])
+        .clamp(true);
+    
+      const rScale = d3.scaleSqrt()
+        .domain(rExtent)
+        .range([3, 30]);
+    
+      const colorScale = d3.scaleOrdinal()
+        .domain(["Developed","Developing","Yes","No"])
+        .range(["#1f77b4","#ff7f0e","#1f77b4","#ff7f0e"]);
+    
+      const xAxis = d3.axisBottom(xScale).ticks(10, ".2s");
+      const yAxis = d3.axisLeft(yScale).ticks(10, ".2s");
+    
+      chartG.append("g")
+        .attr("class", "axis")
+        .attr("transform", `translate(0,${innerHeight})`)
+        .call(xAxis);
+      chartG.append("g")
+        .attr("class", "axis")
+        .call(yAxis);
+    
+      chartG.append("text")
+        .attr("class", "axis-label axis")
+        .attr("x", innerWidth/2)
+        .attr("y", innerHeight+40)
+        .style("text-anchor", "middle")
+        .text("CO₂ Emission");
+    
+      chartG.append("text")
+        .attr("class", "axis-label axis")
+        .attr("transform", "rotate(-90)")
+        .attr("x", -innerHeight/2)
+        .attr("y", -50)
+        .style("text-anchor", "middle")
+        .text("Temperature Contribution");
+    
+      chartG.selectAll(".bubble")
+        .data(data)
+        .enter()
+        .append("circle")
+          .attr("class", "bubble")
+          .attr("cx", d => xScale(d.co2))
+          .attr("cy", d => yScale(d.temp))
+          .attr("r", d => rScale(d.population))
+          .attr("fill", d => colorScale(d.developed))
+          .on("mouseover", (event, d) => {
+            tooltip.style("display", "block")
+              .html(`
+                <strong>${d.country}</strong><br/>
+                CO₂: ${d.co2}<br/>
+                Temp: ${d.temp}<br/>
+                Population: ${d3.format(",")(d.population)}<br/>
+                Developed: ${d.developed}
+              `);
+          })
+          .on("mousemove", (event) => {
+            tooltip.style("left", (event.pageX+10)+"px")
+              .style("top", (event.pageY+10)+"px");
+          })
+          .on("mouseout", () => {
+            tooltip.style("display", "none");
+          });
+    
+      svg.selectAll(".legend").remove();
+      const legendData = ["Developed", "Developing"];
+      const legend = svg.append("g")
+        .attr("class", "legend")
+        .attr("transform", `translate(${innerWidth+margin.left+20},${margin.top+50})`);
+    
+      legend.selectAll("rect")
+        .data(legendData)
+        .enter()
+        .append("rect")
+          .attr("x", 0)
+          .attr("y", (d,i) => i*25)
+          .attr("width", 20)
+          .attr("height", 20)
+          .attr("fill", d => colorScale(d));
+    
+      legend.selectAll("text")
+        .data(legendData)
+        .enter()
+        .append("text")
+          .attr("x", 30)
+          .attr("y", (d,i) => i*25+15)
+          .text(d => d);
+    }
+  })();
+  </script>
+
+</body>
+</html>

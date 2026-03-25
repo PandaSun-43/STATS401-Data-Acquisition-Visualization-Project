@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Bubble Chart with Right-Side Checkbox Filter</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 20px;
+    }
+    /* Container for chart + checkboxes side by side */
+    .chart-container {
+      display: flex;
+      align-items: flex-start; /* top-aligned */
+    }
+    /* The chart area (left side) */
+    #chart {
+      /* You can set a width if desired, or let the SVG define it */
+      margin-right: 10px; 
+    }
+    /* Scrollable container for checkboxes (right side) */
+    #countryCheckboxes {
+      width: 200px;
+      height: 300px;
+      overflow-y: auto;
+      border: 1px solid #ccc;
+      padding: 5px;
+      margin-left: 20px; /* space between chart and checkboxes */
+    }
+    #countryCheckboxes label {
+      display: block;
+      margin-bottom: 4px;
+      font-size: 14px;
+    }
+    .tooltip {
+      position: absolute;
+      background: rgba(0,0,0,0.7);
+      color: #fff;
+      padding: 5px 10px;
+      border-radius: 4px;
+      pointer-events: none;
+      font-size: 14px;
+      display: none;
+    }
+    .bubble {
+      stroke: #fff;
+      stroke-width: 1px;
+    }
+    .axis-label {
+      font-size: 14px;
+      font-weight: bold;
+    }
+    .legend {
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+
+<h2>Bubble Chart: CO₂ Emission vs. Temperature Contribution</h2>
+
+<!-- Flex container: chart on the left, checkboxes on the right -->
+<div class="chart-container">
+  <div id="chart"></div>
+  <div id="countryCheckboxes"></div>
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+// ----------------------------------------------------
+// 1) Dimensions and margins for the bubble chart
+// ----------------------------------------------------
+const svgWidth = 800,
+      svgHeight = 500,
+      margin = { top: 50, right: 150, bottom: 50, left: 70 },
+      innerWidth = svgWidth - margin.left - margin.right,
+      innerHeight = svgHeight - margin.top - margin.bottom;
+
+// Create an SVG in #chart
+const svg = d3.select("#chart")
+  .append("svg")
+  .attr("width", svgWidth)
+  .attr("height", svgHeight);
+
+// A group for the main chart area
+const chartG = svg.append("g")
+  .attr("transform", `translate(${margin.left}, ${margin.top})`);
+
+// Tooltip reference
+const tooltip = d3.select("#tooltip");
+
+// We'll store the entire dataset in a variable
+let fullData = [];
+
+// Load data
+d3.csv("updated_forecast.csv").then(data => {
+  // Parse numeric fields
+  data.forEach(d => {
+    d.co2        = +d["CO2 Emission"];
+    d.temp       = +d["Temperature Contribution"];
+    d.population = +d["Population"];
+    d.developed  = d["Country Classification"]; // e.g. "Developed"/"Developing"
+    d.country    = d["Country"];
+  });
+
+  // Save the full dataset
+  fullData = data;
+
+  // Build the checkbox UI
+  createCountryCheckboxes(data);
+
+  // Initial render with full dataset
+  renderBubbleChart(fullData);
+});
+
+// ----------------------------------------------------
+// 2) Build checkboxes (including "All" option)
+// ----------------------------------------------------
+function createCountryCheckboxes(data) {
+  const container = d3.select("#countryCheckboxes");
+
+  // Collect unique countries
+  const uniqueCountries = Array.from(new Set(data.map(d => d.country))).sort();
+
+  // Add "All" checkbox at the top
+  container.append("label")
+    .html(`<input type="checkbox" id="chkAll" checked> All`)
+    .on("change", function() {
+      const checked = d3.select(this).select("input").property("checked");
+      // If "All" is checked, uncheck everything else & show all data
+      if (checked) {
+        container.selectAll(".country-chk").property("checked", false);
+        renderBubbleChart(fullData);
+      } else {
+        // If "All" is unchecked but no other boxes are checked, chart is empty
+        renderBubbleChart([]);
+      }
+    });
+
+  // For each country, create a checkbox
+  uniqueCountries.forEach(countryName => {
+    container.append("label")
+      .attr("class", "country-label")
+      .html(`<input type="checkbox" class="country-chk" value="${countryName}"> ${countryName}`)
+      .on("change", function() {
+        // If any individual country is checked, uncheck "All"
+        d3.select("#chkAll").property("checked", false);
+
+        // Gather all checked countries
+        const checkedCountries = [];
+        container.selectAll(".country-chk").each(function() {
+          if (d3.select(this).property("checked")) {
+            checkedCountries.push(d3.select(this).property("value"));
+          }
+        });
+
+        // If none are checked, chart is empty
+        if (checkedCountries.length === 0) {
+          renderBubbleChart([]);
+        } else {
+          // Filter data
+          const filtered = fullData.filter(d => checkedCountries.includes(d.country));
+          renderBubbleChart(filtered);
+        }
+      });
+  });
+}
+
+// ----------------------------------------------------
+// 3) Render or update the bubble chart
+// ----------------------------------------------------
+function renderBubbleChart(data) {
+  // Clear old elements
+  chartG.selectAll(".bubble").remove();
+  chartG.selectAll(".axis").remove();
+
+  // If data is empty, just clear chart and return
+  if (!data || data.length === 0) return;
+
+  // Scales
+  const xExtent = d3.extent(data, d => d.co2);
+  const yExtent = d3.extent(data, d => d.temp);
+  const rExtent = d3.extent(data, d => d.population);
+
+  const minNonZeroX = d3.min(data, d => d.co2 > 0 ? d.co2 : Infinity) || 1;
+  const xScale = d3.scaleLog()
+    .domain([minNonZeroX, xExtent[1] || 1])
+    .range([0, innerWidth])
+    .clamp(true);
+
+  const minNonZeroY = d3.min(data, d => d.temp > 0 ? d.temp : Infinity) || 1e-5;
+  const yScale = d3.scaleLog()
+    .domain([minNonZeroY, yExtent[1] || 1])
+    .range([innerHeight, 0])
+    .clamp(true);
+
+  const rScale = d3.scaleSqrt()
+    .domain(rExtent)
+    .range([3, 30]);
+
+  const colorScale = d3.scaleOrdinal()
+    .domain(["Developed","Developing","Yes","No"])
+    .range(["#1f77b4","#ff7f0e","#1f77b4","#ff7f0e"]);
+
+  // Axes
+  const xAxis = d3.axisBottom(xScale).ticks(10, ".2s");
+  const yAxis = d3.axisLeft(yScale).ticks(10, ".2s");
+
+  // Draw axes
+  chartG.append("g")
+    .attr("class", "axis")
+    .attr("transform", `translate(0,${innerHeight})`)
+    .call(xAxis);
+
+  chartG.append("g")
+    .attr("class", "axis")
+    .call(yAxis);
+
+  // Axis labels
+  chartG.append("text")
+    .attr("class", "axis-label axis")
+    .attr("x", innerWidth / 2)
+    .attr("y", innerHeight + 40)
+    .style("text-anchor", "middle")
+    .text("CO₂ Emission");
+
+  chartG.append("text")
+    .attr("class", "axis-label axis")
+    .attr("transform", "rotate(-90)")
+    .attr("x", -innerHeight / 2)
+    .attr("y", -50)
+    .style("text-anchor", "middle")
+    .text("Temperature Contribution");
+
+  // Bubbles
+  chartG.selectAll(".bubble")
+    .data(data)
+    .enter()
+    .append("circle")
+      .attr("class", "bubble")
+      .attr("cx", d => xScale(d.co2))
+      .attr("cy", d => yScale(d.temp))
+      .attr("r", d => rScale(d.population))
+      .attr("fill", d => colorScale(d.developed))
+      .on("mouseover", (event, d) => {
+        tooltip.style("display", "block")
+          .html(`
+            <strong>${d.country}</strong><br/>
+            CO₂: ${d.co2}<br/>
+            Temp: ${d.temp}<br/>
+            Population: ${d3.format(",")(d.population)}<br/>
+            Developed: ${d.developed}
+          `);
+      })
+      .on("mousemove", (event) => {
+        tooltip
+          .style("left", (event.pageX + 10) + "px")
+          .style("top",  (event.pageY + 10) + "px");
+      })
+      .on("mouseout", () => {
+        tooltip.style("display", "none");
+      });
+
+  // ----------------------------------------------------
+  // 4) Add color legend (Developed / Developing)
+  // ----------------------------------------------------
+  // Remove old legend if any
+  svg.selectAll(".legend").remove();
+
+  const legendData = ["Developed", "Developing"];
+  const legend = svg.append("g")
+    .attr("class", "legend")
+    .attr("transform", `translate(${innerWidth + margin.left + 20}, ${margin.top + 50})`);
+
+  legend.selectAll("rect")
+    .data(legendData)
+    .enter()
+    .append("rect")
+      .attr("x", 0)
+      .attr("y", (d, i) => i * 25)
+      .attr("width", 20)
+      .attr("height", 20)
+      .attr("fill", d => colorScale(d));
+
+  legend.selectAll("text")
+    .data(legendData)
+    .enter()
+    .append("text")
+      .attr("x", 30)
+      .attr("y", (d, i) => i * 25 + 15)
+      .text(d => d);
+}
+</script>
+
+</body>
+</html>

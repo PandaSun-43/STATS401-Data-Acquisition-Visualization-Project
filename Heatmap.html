@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CO2 Emissions Heatmap</title>
+    <script type="text/javascript" src="d3.v7.js"></script>
+    <style>
+        .country {
+            stroke: #fff;
+            stroke-width: 0.5;
+        }
+        .legend {
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <svg width="960" height="600"></svg>
+    <script>
+        const width = 960;
+        const height = 600;
+        const projection = d3.geoMercator().scale(150).translate([width / 2, height / 1.5]);
+        const path = d3.geoPath().projection(projection);
+        const colorScale = d3.scaleSequential(d3.interpolateYlOrRd).domain([0, 25]);
+
+        // Load GeoJSON data for the world map
+        d3.json("https://raw.githubusercontent.com/holtzy/D3-graph-gallery/master/DATA/world.geojson").then(function(geoData) {
+            // Load your CO2 data
+            d3.csv("Per capita CO2 emissions 2023.csv",function(d){
+                console.log("Raw data:", d);
+                return {
+                    country: d.Entity, 
+                    emissions: +d['Per capita CO2 emissions']
+                };
+                })
+                .then(function(data) {
+                    // Create a dictionary from the data
+                    let emissions = {};
+                    data.forEach(function(d) {
+                        emissions[d.country] = d.emissions;
+                    });
+                
+                    d3.select("svg")
+                        .selectAll("path")
+                        .data(geoData.features)
+                        .enter().append("path")
+                        .attr("class", "country")
+                        .attr("d", path)
+                        .attr("fill", function(d) {
+                            const countryName = d.properties.name.trim(); // Remove any extra spaces in GeoJSON country names
+                            const emissionValue = emissions[countryName];
+                            return emissionValue ? colorScale(emissionValue) : "#ccc";  // Use color scale
+                        })
+                        .on("mouseover", function(event, d) {
+                            const countryName = d.properties.name;
+                            const emissionValue = emissions[countryName];
+                            if (emissionValue) {
+                                d3.select(this).style("opacity", 0.7);
+                                tooltip.transition().duration(200).style("opacity", 1);
+                                tooltip.html(`${countryName}: ${emissionValue.toFixed(2)} CO2/capita`)
+                                    .style("left", `${event.pageX + 5}px`)
+                                    .style("top", `${event.pageY - 28}px`);
+                            }
+                        })
+                        .on("mouseout", function(d) {
+                            d3.select(this).style("opacity", 1);
+                            tooltip.transition().duration(500).style("opacity", 0);
+                        })
+                        .on("click", function(event, d) {
+                            const countryName = d.properties.name.trim();
+                            const emissionValue = emissions[countryName];
+                            if (emissionValue) {
+                                alert(`${countryName}: ${emissionValue.toFixed(2)} CO2/capita`);  // Show an alert on click
+                            }
+                        });
+                        const tooltip = d3.select("body").append("div")
+                        .attr("class", "tooltip")
+                        .style("position", "absolute")
+                        .style("opacity", 0)
+                        .style("background-color", "rgba(0, 0, 0, 0.7)")
+                        .style("color", "white")
+                        .style("border-radius", "5px")
+                        .style("padding", "5px");
+                })
+                .catch(function(error) {
+                    console.log("Error:", error)
+            });
+        });
+    </script>
+</body>
+</html>
